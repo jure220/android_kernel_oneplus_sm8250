@@ -39,6 +39,7 @@
 #include <linux/proc_ns.h>
 #include <linux/proc_fs.h>
 #include <linux/anon_inodes.h>
+#include <linux/file.h>
 #include <linux/sched/signal.h>
 #include <linux/sched/task.h>
 #include <linux/idr.h>
@@ -496,6 +497,47 @@ static int pidfd_create(struct pid *pid)
  * Return: On success, a cloexec pidfd is returned.
  *         On error, a negative errno number will be returned.
  */
+/*
+ * (halium/instantnoodlep) Backport of waitid(P_PIDFD) support from Linux 5.4
+ * upstream commit 3695eae5fee0 ("pidfd: add P_PIDFD to waitid()").
+ *
+ * This kernel already carries the pidfd_open() backport but NOT the waitid()
+ * side, so glib 2.80 (Ubuntu 24.04) successfully obtains a pidfd and then
+ * fails with EINVAL in waitid(), killing lightdm:
+ *   glib/gmain.c: waitid(pid:N, pidfd=M) failed: Invalid argument (22)
+ */
+static struct pid *pidfd_pid(const struct file *file)
+{
+	if (file->f_op == &pidfd_fops)
+		return file->private_data;
+
+	return ERR_PTR(-EBADF);
+}
+
+/**
+ * pidfd_get_pid() - Retrieve some task's pid from a pidfd
+ * @fd: the pidfd
+ *
+ * Return: On success, the struct pid associated with the pidfd.
+ *         On error, an error pointer.
+ */
+struct pid *pidfd_get_pid(unsigned int fd)
+{
+	struct fd f;
+	struct pid *pid;
+
+	f = fdget(fd);
+	if (!f.file)
+		return ERR_PTR(-EBADF);
+
+	pid = pidfd_pid(f.file);
+	if (!IS_ERR(pid))
+		get_pid(pid);
+
+	fdput(f);
+	return pid;
+}
+
 SYSCALL_DEFINE2(pidfd_open, pid_t, pid, unsigned int, flags)
 {
 	int fd, ret;

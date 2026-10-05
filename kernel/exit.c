@@ -1691,11 +1691,21 @@ static long kernel_waitid(int which, pid_t upid, struct waitid_info *infop,
 		if (upid <= 0)
 			return -EINVAL;
 		break;
+	/* (halium) backport of waitid(P_PIDFD), upstream 3695eae5fee0 */
+	case P_PIDFD:
+		type = PIDTYPE_PID;
+		if (upid < 0)
+			return -EINVAL;
+
+		pid = pidfd_get_pid(upid);
+		if (IS_ERR(pid))
+			return PTR_ERR(pid);
+		break;
 	default:
 		return -EINVAL;
 	}
 
-	if (type < PIDTYPE_MAX)
+	if (type < PIDTYPE_MAX && !pid)
 		pid = find_get_pid(upid);
 
 	wo.wo_type	= type;
