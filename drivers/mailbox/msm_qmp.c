@@ -986,10 +986,31 @@ static int qmp_mbox_probe(struct platform_device *pdev)
 			mdev->rx_irq_line, ret);
 		return ret;
 	}
-	ret = enable_irq_wake(mdev->rx_irq_line);
-	if (ret < 0)
-		QMP_ERR(mdev->ilc, "enable_irq_wake on %d failed: %d\n",
-			mdev->rx_irq_line, ret);
+	/*
+	 * DELIBERATELY NOT enable_irq_wake() -- 2026-09-18, Ubuntu Touch port.
+	 *
+	 * The IRQ above is requested with IRQF_NO_SUSPEND, which is correct and
+	 * necessary: this mailbox talks to the AOP and has to keep working
+	 * across the suspend path itself. But IRQF_NO_SUSPEND together with
+	 * enable_irq_wake() is a contradiction, and this kernel says so itself
+	 * in irq_may_run() (kernel/irq/chip.c):
+	 *
+	 *     if (desc->no_suspend_depth && irqd_is_wakeup_set(&desc->irq_data))
+	 *             log_abnormal_wakeup_reason("misconfigured IRQ %u %s", ...)
+	 *
+	 * On this device that produced, on every single suspend attempt:
+	 *     PM: suspend entry (deep)
+	 *     Resume caused by misconfigured IRQ 401 qcom,qmp-aop
+	 *     PM: suspend exit                       (~0.25 s later)
+	 * i.e. routine AOP power-management chatter was waking the whole SoC
+	 * immediately, so the phone never actually slept -- measured at ~0.2%
+	 * of wall time asleep.
+	 *
+	 * Dropping the wake registration does not stop the mailbox working
+	 * during suspend: IRQF_NO_SUSPEND already keeps the interrupt enabled
+	 * and the handler runs. It only stops an AOP message from counting as a
+	 * reason to wake the system, which is what it should never have been.
+	 */
 
 	/* Trigger fake RX in case of missed interrupt */
 	if (of_property_read_bool(edge_node, "qcom,early-boot"))
