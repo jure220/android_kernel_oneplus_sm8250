@@ -6290,6 +6290,23 @@ static int init_input_device(struct touchpanel_data *ts)
 	}
 #endif
 	input_set_abs_params(ts->input_dev, ABS_MT_TOUCH_MAJOR, 0, 255, 0, 0);
+	/* HALIUM(instantnoodlep): the driver set_bit()s ABS_MT_WIDTH_MAJOR and
+	 * reports values on it (input_report_abs above), but never declared its
+	 * range -- so min and max both defaulted to 0. libinput treats that as a
+	 * kernel bug and REFUSES the whole device:
+	 *   libinput error: event1 - touchpanel: kernel bug: device has
+	 *                   min == max on ABS_MT_WIDTH_MAJOR
+	 * The touchscreen was then the only input device Mir did not add, so the
+	 * UI rendered but did not respond to touch. Same range as TOUCH_MAJOR,
+	 * which is the domain the driver actually reports width_major in. */
+	input_set_abs_params(ts->input_dev, ABS_MT_WIDTH_MAJOR, 0, 255, 0, 0);
+	/* HALIUM(instantnoodlep): same defect as WIDTH_MAJOR above --
+	 * ABS_MT_PRESSURE is set_bit() and reported on, but its range was never
+	 * declared, so libinput refused the device with
+	 *   kernel bug: device has min == max on ABS_MT_PRESSURE
+	 * (this surfaced only after WIDTH_MAJOR was fixed -- libinput reports
+	 * one offending axis at a time). */
+	input_set_abs_params(ts->input_dev, ABS_MT_PRESSURE, 0, 255, 0, 0);
 	input_set_abs_params(ts->input_dev, ABS_MT_POSITION_X, 0, ts->resolution_info.max_x - 1, 0, 0);
 	input_set_abs_params(ts->input_dev, ABS_MT_POSITION_Y, 0, ts->resolution_info.max_y - 1, 0, 0);
 	input_set_drvdata(ts->input_dev, ts);
