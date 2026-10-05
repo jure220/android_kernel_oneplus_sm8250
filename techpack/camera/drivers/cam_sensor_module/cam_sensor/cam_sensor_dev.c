@@ -4,6 +4,9 @@
  */
 
 #include "cam_sensor_dev.h"
+#include <linux/sched.h>
+#include <linux/pid.h>
+#include <linux/pid_namespace.h>
 #include "cam_req_mgr_dev.h"
 #include "cam_sensor_soc.h"
 #include "cam_sensor_core.h"
@@ -242,6 +245,26 @@ power_down:
         return rc;
 }
 
+/*
+ * halium: is the process that probed this sensor still running?
+ * tgid is the GLOBAL id (the provider lives in the LXC pid namespace), so look
+ * it up in init_pid_ns, not in the caller's namespace.
+ */
+static bool cam_sensor_owner_alive(pid_t tgid)
+{
+	struct task_struct *t;
+	bool alive = false;
+
+	if (!tgid)
+		return false;
+	rcu_read_lock();
+	t = pid_task(find_pid_ns(tgid, &init_pid_ns), PIDTYPE_PID);
+	if (t && !(t->flags & PF_EXITING))
+		alive = true;
+	rcu_read_unlock();
+	return alive;
+}
+
 static int cam_sensor_subdev_close(struct v4l2_subdev *sd,
 	struct v4l2_subdev_fh *fh)
 {
@@ -254,6 +277,29 @@ static int cam_sensor_subdev_close(struct v4l2_subdev *sd,
 	}
 
 	mutex_lock(&(s_ctrl->cam_sensor_mutex));
+	/*
+	 * halium: every close of this node runs cam_sensor_shutdown(), which
+	 * clears is_probe_succeed.  On Android only the camera provider opens
+	 * sensor nodes, but on a Halium device an unrelated Linux process that
+	 * merely opens and closes /dev/v4l-subdevN wiped the provider's probe
+	 * state; the next CAM_ACQUIRE_DEV then failed ("Not in right state to
+	 * aquire"), CamX aborted and the camera app showed a black viewfinder.
+	 * A foreign process never acquired the sensor, so its close must not
+	 * tear the provider's state down.  Closes by the owner itself, by an
+	 * exiting owner, or from kernel context (deferred fput, cam_req_mgr
+	 * shutdown) still shut the sensor down as before.
+	 */
+	if (!(current->flags & PF_KTHREAD) && s_ctrl->owner_tgid &&
+	    current->tgid != s_ctrl->owner_tgid &&
+	    cam_sensor_owner_alive(s_ctrl->owner_tgid)) {
+		CAM_WARN(CAM_SENSOR,
+			"close by %s (pid %d) ignored: sensor 0x%x is owned by pid %d",
+			current->comm, current->tgid,
+			s_ctrl->sensordata->slave_info.sensor_id,
+			s_ctrl->owner_tgid);
+		mutex_unlock(&(s_ctrl->cam_sensor_mutex));
+		return 0;
+	}
         if(!is_ftm_current_test)
             cam_sensor_shutdown(s_ctrl);
 	mutex_unlock(&(s_ctrl->cam_sensor_mutex));

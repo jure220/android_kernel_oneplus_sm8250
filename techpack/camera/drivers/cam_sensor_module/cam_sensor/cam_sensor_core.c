@@ -1276,6 +1276,7 @@ int32_t cam_sensor_driver_cmd(struct cam_sensor_ctrl_t *s_ctrl,
 		 */
 		s_ctrl->is_probe_succeed = 1;
 		s_ctrl->sensor_state = CAM_SENSOR_INIT;
+		s_ctrl->owner_tgid = current->tgid;
 
 #ifdef CONFIG_PROJECT_INFO
 		if (s_ctrl->id == 0)
